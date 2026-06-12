@@ -1,0 +1,211 @@
+2.7.7 working pong and crash intro
+
+/**
+ * CRi1 UNIVERSAL CONSOLE v2.7.7 - DEEP SONAR
+ * FIXED: 'Pong' speaker pop replaced with a resonant sub-thud.
+ * AUDIO: Added a 0.05s attack ramp to prevent digital clicking.
+ */
+
+let cart, ram; 
+let osc, noise, ping; 
+let graveyard = [];
+let motherIntent = { x: 200, y: -100 }; 
+let state = "ENTERING"; 
+let stateTimer = 40;    
+let sample = { x: 200, y: 100, active: true, carried: false };
+let samplesExtracted = 0;
+let hp = 3; 
+let isDead = false;
+let shake = 0;
+let flash = 0; 
+let currentQuip = "";
+let geigerTimer = 0;
+
+const quips = [
+  "MOTHER HAS DRUNK YOUR SOUP.",
+  "YOUR KIDNEYS TASTE AMAZING.",
+  "SUCH SWEET MARROW...",
+  "FREQUENCIES MERGED. DELICIOUS.",
+  "YOUR LAMENT IS NUTRITIOUS.",
+  "ANOTHER MEMORY FOR THE PILE.",
+  "YOU RESONATE BETTER AS PULP."
+];
+
+function setup() {
+  createCanvas(400, 400);
+  cart = {
+    "metadata": { "title": "SLIMY MOTHER: MASTER", "ver": "2.7.7" },
+    "memory_map": { "PULSE_TICK": 0 },
+    "graphics": {
+      "playfield": [0x81, 0xC3, 0xE7, 0xFF, 0xBD, 0xA5, 0x42, 0x18],
+      "player": [0x18, 0x18, 0x3C, 0x24, 0x24, 0x3C, 0x18, 0x18]
+    }
+  };
+  ram = cart.memory_map;
+  
+  osc = new p5.Oscillator('triangle'); osc.amp(0); osc.start();
+  noise = new p5.Noise('brown'); noise.amp(0); noise.start();
+  ping = new p5.Oscillator('sine'); ping.amp(0); ping.start();
+  
+  spawnSample();
+}
+
+function draw() {
+  if (isDead) { renderGameOver(); return; }
+  if (samplesExtracted >= 7) { renderVictoryState(); return; }
+
+  if (shake > 0) {
+    translate(random(-shake, shake), random(-shake, shake));
+    shake *= 0.85; 
+  }
+
+  let heartSpeed = 0.05 + (graveyard.length * 0.02) + (samplesExtracted * 0.06);
+  ram.PULSE_TICK = (ram.PULSE_TICK + heartSpeed) % TWO_PI;
+  background(10, 5, 20);
+
+  updateMotherLogic();
+  handleSample();
+  
+  if (mouseY < 320 && frameCount % 60 === 0 && state !== "ENTERING") {
+    graveyard.push({x: mouseX - 24, y: mouseY - 19, type: 'GHOST'});
+  }
+
+  handleCollisions();
+  handleSystems();
+  renderPlasmoid();
+  renderOoze();
+  renderGraveyard();
+  renderSample();
+  renderPlayer();
+  renderHUD();
+
+  if (flash > 0) {
+    fill(255, flash);
+    rect(0, 0, width, height);
+    flash -= 15;
+  }
+}
+
+function handleSystems() {
+  if (getAudioContext().state !== 'running') return;
+
+  // 1. GEIGER CLICK (Y-Axis)
+  let radiationLevel = map(mouseY, 400, 0, 0, 1);
+  geigerTimer++;
+  if (geigerTimer > (40 * (1 - radiationLevel)) + random(5)) {
+    noise.amp(0.3, 0.01); noise.amp(0, 0.03); 
+    geigerTimer = 0;
+  }
+
+  // 2. STEREO HUM (X-Axis)
+  let panValue = map(mouseX, 0, 400, -1, 1);
+  ping.pan(panValue);
+  
+  // Return to low hum if not playing a ping or pong
+  if (ping.amp().value < 0.1) {
+    ping.setType('sine');
+    ping.freq(220 + sin(frameCount * 0.1) * 20);
+    ping.amp(0.1, 0.1);
+  }
+
+  // 3. ENGINE HUM (Base Frequency)
+  if (state !== "ENTERING") {
+    let baseFreq = (state === "NOSTALGIA") ? 110 : 55;
+    osc.freq(baseFreq + (graveyard.length * 15));
+    osc.amp(0.1, 0.1);
+  }
+}
+
+function updateMotherLogic() {
+  if (state === "ENTERING") {
+    stateTimer--;
+    if (stateTimer <= 0) {
+      motherIntent.y = lerp(motherIntent.y, 200, 0.25);
+      if (motherIntent.y > 190) {
+        state = "HUNTING";
+        shake = 45; 
+        flash = 255; 
+        noise.amp(1.0, 0.01); noise.amp(0, 0.8);
+        osc.freq(40); osc.amp(0.8, 0.01); osc.freq(20, 0.5); osc.amp(0, 0.6); 
+      }
+    }
+    return;
+  }
+
+  let trackingSpeed = 0.02 + (samplesExtracted * 0.01);
+  if (state === "HUNTING") {
+    motherIntent.x = lerp(motherIntent.x, mouseX, trackingSpeed);
+    motherIntent.y = lerp(motherIntent.y, mouseY, trackingSpeed);
+    for (let g of graveyard) {
+      if (dist(motherIntent.x, motherIntent.y, g.x, g.y) < 40) {
+        state = "NOSTALGIA"; stateTimer = random(30, 90);
+      }
+    }
+  } else if (state === "NOSTALGIA") {
+    stateTimer--;
+    motherIntent.x += random(-2, 2); motherIntent.y += random(-2, 2);
+    if (stateTimer <= 0) state = "SNAPBACK";
+  } else if (state === "SNAPBACK") {
+    motherIntent.x = lerp(motherIntent.x, mouseX, 0.15);
+    motherIntent.y = lerp(motherIntent.y, mouseY, 0.15);
+    if (dist(motherIntent.x, motherIntent.y, mouseX, mouseY) < 5) state = "HUNTING";
+  }
+}
+
+function handleSample() {
+  // THE PING (High-pitched grab)
+  if (!sample.carried && dist(mouseX, mouseY, sample.x, sample.y) < 25) {
+    sample.carried = true;
+    ping.setType('sine');
+    ping.freq(880); 
+    ping.amp(0.5, 0.05); // Attack ramp to prevent pop
+    ping.amp(0.1, 0.4);  // Sustain
+  }
+  
+  if (sample.carried) {
+    sample.x = mouseX; sample.y = mouseY + 15;
+    
+    // THE PONG (Deep-pitched drop-off)
+    if (mouseY > 360) {
+      samplesExtracted++; 
+      sample.carried = false; 
+      hp = min(hp + 1, 3);
+      
+      // TRIGGER THE SONAR PONG
+      ping.setType('triangle');
+      ping.freq(110); 
+      ping.amp(0.9, 0.05); // Attack ramp to prevent pop
+      ping.amp(0, 1.2);   // Long decay tail
+      
+      if(graveyard.length > 2) graveyard = graveyard.slice(2); 
+      spawnSample();
+    }
+  }
+}
+
+function handleCollisions() {
+  if (state === "ENTERING") return;
+  if (dist(mouseX, mouseY, motherIntent.x, motherIntent.y) < 35 && state !== "NOSTALGIA") {
+    background(255, 0, 0, 100); 
+    if (frameCount % 60 === 0) { 
+      hp--;
+      if (hp <= 0) { isDead = true; currentQuip = random(quips); }
+    }
+  }
+}
+
+function renderGameOver() {
+  background(0); textAlign(CENTER); fill(255, 0, 0); textSize(42); text("SYSTEM ANNEXED", 200, 150);
+  fill(200, 0, 0); textSize(20); text('"' + currentQuip + '"', 200, 210);
+  fill(255); textSize(16); text("TAP TO REBOOT", 200, 300);
+}
+
+function renderVictoryState() { background(20, 40, 10); fill(255, 215, 0); textAlign(CENTER); textSize(32); text("HARMONIC SUCCESS", 200, 180); fill(255); textSize(16); text("TAP TO REBOOT", 200, 240); }
+function renderHUD() { fill(0, 150); rect(0, 370, 400, 30); fill(255); textAlign(LEFT); text("HULL: " + hp, 15, 390); textAlign(RIGHT); text("HARMONICS: " + samplesExtracted + "/7", 385, 390); }
+function spawnSample() { sample.x = random(50, 350); sample.y = random(50, 200); }
+function renderSample() { fill(255, 215, 0); noStroke(); ellipse(sample.x, sample.y, 15, 15); }
+function renderPlayer() { fill(255); cart.graphics.player.forEach((row, i) => { for (let b = 0; b < 8; b++) { if ((row >> b) & 1) rect(mouseX + (b * 4) - 16, mouseY + (i * 4) - 16, 4, 4); } }); }
+function renderOoze() { fill(0, 200, 0, 50); cart.graphics.playfield.forEach((row, i) => { for (let b = 0; b < 8; b++) { if ((row >> b) & 1) rect(b * 50, i * 40, 48, 38); } }); }
+function renderPlasmoid() { fill(0, 200, 0, 180); push(); translate(motherIntent.x - 200, motherIntent.y - 150); cart.graphics.playfield.forEach((row, i) => { for (let b = 0; b < 8; b++) { if (!((row >> b) & 1)) rect(b * 50, i * 40, 48, 38); } }); pop(); }
+function renderGraveyard() { graveyard.forEach(g => { fill(150, 150, 150, 150); rect(g.x, g.y, 48, 38); }); }
+function touchStarted() { userStartAudio(); if (isDead || samplesExtracted >= 7) { hp = 3; isDead = false; samplesExtracted = 0; graveyard = []; motherIntent.y = -100; state = "ENTERING"; stateTimer = 40; spawnSample(); } return false; }
