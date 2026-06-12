@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SLIMY MOTHER: V2.8.2 MASTER</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/addons/p5.sound.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0a0514;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            color: #fff;
+            font-family: sans-serif;
+        }
+        canvas {
+            border: 2px solid #00c800;
+            box-shadow: 0 0 20px rgba(0, 200, 0, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+<script>
+/**
+ * CRi1 UNIVERSAL CONSOLE v2.8.2 - DESPERATION PROTOCOL
+ * STANDALONE HTML WRAPPER
+ */
+
+let cart, ram; 
+let osc, noise, ping; 
+let graveyard = [];
+let motherIntent = { x: 200, y: -100 }; 
+let state = "ENTERING"; 
+let stateTimer = 40;    
+let sample = { x: 200, y: 100, active: true, carried: false };
+let samplesExtracted = 0;
+let hp = 3; 
+let isDead = false;
+let shake = 0, flash = 0;
+let currentQuip = "";
+let geigerTimer = 0;
+let motherPixels = [];
+
+const quips = [
+  "MOTHER HAS DRUNK YOUR SOUP.",
+  "YOUR KIDNEYS TASTE AMAZING.",
+  "SUCH SWEET MARROW...",
+  "FREQUENCIES MERGED. DELICIOUS.",
+  "YOUR LAMENT IS NUTRITIOUS.",
+  "ANOTHER MEMORY FOR THE PILE.",
+  "YOU RESONATE BETTER AS PULP."
+];
+
+function setup() {
+  let cnv = createCanvas(400, 400);
+  cnv.style('display', 'block');
+  
+  cart = {
+    "metadata": { "title": "SLIMY MOTHER: MASTER", "ver": "2.8.2" },
+    "memory_map": { "PULSE_TICK": 0 },
+    "graphics": {
+      "playfield": [0x81, 0xC3, 0xE7, 0xFF, 0xBD, 0xA5, 0x42, 0x18],
+      "player": [0x18, 0x18, 0x3C, 0x24, 0x24, 0x3C, 0x18, 0x18]
+    }
+  };
+  ram = cart.memory_map;
+  resetMother();
+  
+  osc = new p5.Oscillator('triangle'); osc.amp(0); osc.start();
+  noise = new p5.Noise('brown'); noise.amp(0); noise.start();
+  ping = new p5.Oscillator('sine'); ping.amp(0); ping.start();
+  
+  spawnSample();
+}
+
+function resetMother() {
+  motherPixels = [];
+  cart.graphics.playfield.forEach((row, i) => {
+    for (let b = 0; b < 8; b++) {
+      if ((row >> b) & 1) motherPixels.push({r: i, c: b, active: true});
+    }
+  });
+}
+
+function draw() {
+  if (isDead) { renderGameOver(); return; }
+  
+  let activePixels = motherPixels.filter(p => p.active);
+  if (activePixels.length === 0) { renderVictoryState(); return; }
+
+  if (shake > 0) { translate(random(-shake, shake), random(-shake, shake)); shake *= 0.85; }
+  background(10, 5, 20);
+
+  updateMotherLogic();
+  handleSample();
+  
+  if (mouseY < 320 && frameCount % 60 === 0 && state !== "ENTERING") {
+    graveyard.push({x: mouseX - 24, y: mouseY - 19});
+  }
+
+  handleCollisions();
+  handleSystems();
+  renderPlasmoid(); 
+  renderOoze();
+  renderGraveyard();
+  renderSample();
+  renderPlayer();
+  renderHUD(activePixels.length);
+
+  if (flash > 0) { fill(255, flash); rect(0, 0, width, height); flash -= 15; }
+}
+
+function handleSystems() {
+  if (getAudioContext().state !== 'running') return;
+  let radiationLevel = map(mouseY, 400, 0, 0, 1);
+  geigerTimer++;
+  if (geigerTimer > (40 * (1 - radiationLevel)) + random(5)) {
+    noise.amp(0.3, 0.01); noise.amp(0, 0.03); 
+    geigerTimer = 0;
+  }
+  let panValue = map(mouseX, 0, 400, -1, 1);
+  ping.pan(panValue);
+  
+  if (!sample.carried && ping.amp().value < 0.1) {
+    ping.setType('sine'); ping.freq(220 + sin(frameCount * 0.1) * 20); ping.amp(0.1, 0.1);
+  }
+  
+  if (state !== "ENTERING") {
+    let baseFreq = (state === "NOSTALGIA") ? 110 : 55;
+    osc.freq(baseFreq + (graveyard.length * 15)); osc.amp(0.1, 0.1);
+  }
+}
+
+function updateMotherLogic() {
+  if (state === "ENTERING") {
+    stateTimer--;
+    if (stateTimer <= 0) {
+      motherIntent.y = lerp(motherIntent.y, 200, 0.25);
+      if (motherIntent.y > 190) {
+        state = "HUNTING"; shake = 45; flash = 255; 
+        noise.amp(1.0, 0.01); noise.amp(0, 0.8);
+        osc.freq(40); osc.amp(0.8, 0.01); osc.freq(20, 0.5); osc.amp(0, 0.6); 
+      }
+    }
+    return;
+  }
+
+  let activeCount = motherPixels.filter(p => p.active).length;
+  let speedBonus = map(activeCount, 32, 0, 0.01, 0.035); 
+  let trackingSpeed = 0.02 + speedBonus;
+  
+  if (state === "HUNTING") {
+    let jitter = (activeCount < 10) ? random(-4, 4) : 0;
+    motherIntent.x = lerp(motherIntent.x, mouseX + jitter, trackingSpeed);
+    motherIntent.y = lerp(motherIntent.y, mouseY + jitter, trackingSpeed);
+    
+    for (let g of graveyard) {
+      if (dist(motherIntent.x, motherIntent.y, g.x, g.y) < 40) {
+        state = "NOSTALGIA"; stateTimer = random(30, 90);
+      }
+    }
+  } else if (state === "NOSTALGIA") {
+    stateTimer--;
+    motherIntent.x += random(-2, 2); motherIntent.y += random(-2, 2);
+    if (stateTimer <= 0) state = "SNAPBACK";
+  } else if (state === "SNAPBACK") {
+    motherIntent.x = lerp(motherIntent.x, mouseX, 0.15);
+    motherIntent.y = lerp(motherIntent.y, mouseY, 0.15);
+    if (dist(motherIntent.x, motherIntent.y, mouseX, mouseY) < 5) state = "HUNTING";
+  }
+}
+
+function handleSample() {
+  if (!sample.carried && dist(mouseX, mouseY, sample.x, sample.y) < 25) {
+    sample.carried = true;
+    ping.setType('sine'); ping.freq(880); ping.amp(0.5, 0.05); ping.amp(0.1, 0.4);
+  }
+  
+  if (sample.carried && mouseY > 360) {
+    if (hp === 3) {
+      let activeOnes = motherPixels.filter(p => p.active);
+      if (activeOnes.length > 0) {
+        random(activeOnes).active = false;
+        shake = 15; 
+      }
+    } else { hp++; }
+    samplesExtracted++; sample.carried = false;
+    ping.setType('triangle'); ping.freq(110); ping.amp(0.9, 0.05); ping.amp(0, 1.2); 
+    if(graveyard.length > 2) graveyard = graveyard.slice(2); 
+    spawnSample();
+  }
+}
+
+function handleCollisions() {
+  if (state === "ENTERING") return;
+  if (dist(mouseX, mouseY, motherIntent.x, motherIntent.y) < 35 && state !== "NOSTALGIA") {
+    background(255, 0, 0, 100); 
+    if (frameCount % 60 === 0) { 
+      hp--; if (hp <= 0) { isDead = true; currentQuip = random(quips); }
+    }
+  }
+}
+
+function renderGameOver() {
+  background(0); textAlign(CENTER); fill(255, 0, 0); textSize(42); text("SYSTEM ANNEXED", 200, 150);
+  fill(200, 0, 0); textSize(20); text('"' + currentQuip + '"', 200, 210);
+  fill(255); textSize(16); text("TAP TO REBOOT", 200, 300);
+}
+
+function renderVictoryState() {
+  background(0); textAlign(CENTER); fill(0, 255, 0); textSize(32); 
+  text("YOU ARE THE\nNEW MONSTER\nNOW", 200, 180); 
+  fill(255); textSize(14); text("TAP TO FEED THE CYCLE", 200, 320);
+}
+
+function renderHUD(remaining) {
+  fill(0, 150); rect(0, 370, 400, 30);
+  fill(255); textSize(12); textAlign(LEFT); text("HULL: " + hp, 15, 390);
+  textAlign(RIGHT); text("MOTHER MASS: " + remaining, 385, 390);
+}
+
+function spawnSample() { sample.x = random(50, 350); sample.y = random(50, 200); }
+function renderSample() { fill(255, 215, 0); noStroke(); ellipse(sample.x, sample.y, 15, 15); }
+function renderPlayer() { fill(255); cart.graphics.player.forEach((row, i) => { for (let b = 0; b < 8; b++) { if ((row >> b) & 1) rect(mouseX + (b * 4) - 16, mouseY + (i * 4) - 16, 4, 4); } }); }
+function renderOoze() { fill(0, 200, 0, 50); cart.graphics.playfield.forEach((row, i) => { for (let b = 0; b < 8; b++) { if ((row >> b) & 1) rect(b * 50, i * 40, 48, 38); } }); }
+function renderPlasmoid() { 
+  let count = motherPixels.filter(p => p.active).length;
+  if (count < 10) { fill(150 + sin(frameCount * 0.2) * 105, 0, 0, 200); } else { fill(0, 200, 0, 180); }
+  push(); translate(motherIntent.x - 200, motherIntent.y - 150); 
+  motherPixels.forEach(p => { if (p.active) rect(p.c * 50, p.r * 40, 48, 38); }); 
+  pop(); 
+}
+function renderGraveyard() { graveyard.forEach(g => { fill(150, 150, 150, 150); rect(g.x, g.y, 48, 38); }); }
+function touchStarted() { userStartAudio(); if (isDead || motherPixels.filter(p=>p.active).length === 0) { hp = 3; isDead = false; samplesExtracted = 0; graveyard = []; motherIntent.y = -100; state = "ENTERING"; stateTimer = 40; resetMother(); spawnSample(); } return false; }
+function mousePressed() { if (typeof(touchStarted) === 'function') touchStarted(); }
+</script>
+</body>
+</html>
